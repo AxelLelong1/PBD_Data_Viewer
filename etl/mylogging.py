@@ -49,5 +49,3 @@ def getLogger(name, level=log_level,
         sh.setFormatter(formatter)
         logger.addHandler(sh)
     return logger
-
-

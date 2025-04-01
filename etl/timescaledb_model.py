@@ -422,6 +422,6 @@ class TimescaleStockMarketModel:
 if __name__ == "__main__":
     import doctest
     # timescaleDB shoul run, possibly in Docker
-    db = TimescaleStockMarketModel("bourse", "ricou", "localhost", "monmdp")
-    #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'db', 'monmdp') # inside docker
+    #db = TimescaleStockMarketModel("bourse", "ricou", "localhost", "monmdp")
+    db = TimescaleStockMarketModel('bourse', 'ricou', 'db', 'monmdp') # inside docker
     doctest.testmod()
