@@ -5,6 +5,7 @@ __pycache__/
 
 docker/bourse/
 docker/etl/*
+0docker/dashboard/*
 
 # C extensions
 *.so
