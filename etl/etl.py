@@ -46,13 +46,32 @@ def daterange(start_date, end_date):
         current_date += timedelta(days=1)
 
 def find_boursorama(date):
-    date = date.isoformat()
-    pattern = re.compile(rf"{date} (\d{2}:\d{2}):\d{2}\.\d+")
-    path = os.path.join(HOME, "boursorama", date.year, f"compA {date.strftime("%Y-%m-%d")}")
-    if not os.path.exists(path):
-        print(f"Fichier Boursorama {path} introuvable.")
+    d = date.strftime("%Y-%m-%d")
+    base_path = os.path.join(HOME, "boursorama")
+    matching_files = []
+
+    # Parcours récursif
+    for root, dirs, files in os.walk(base_path):
+        for file in files:
+            if d in file:
+                full_path = os.path.join(root, file)
+                matching_files.append(full_path)
+
+    if not matching_files:
+        print(f"Aucun fichier Boursorama trouvé pour la date {d}.")
         return None
-    return path
+
+    return matching_files
+
+def read_boursorama(path):
+    try:
+        df = pd.read_pickle(path)
+        headers = df.columns.tolist()
+        return df, headers
+    except Exception as e:
+        print(f"Erreur lors de la lecture de {path}: {e}")
+        return None, None
+
 
 def find_euronext(date):
     date = date.isoformat()
@@ -65,12 +84,77 @@ def find_euronext(date):
 def read_euronext(path):
     try:
         df = pd.read_csv(path, sep='\t', skiprows=[1,2,3])
-        print(df.iloc[np.random.randint(0, len(df))])
         headers = df.columns.tolist()
         return df, headers
     except Exception as e:
         print(f"Erreur lors de la lecture de {path}: {e}")
         return None, None
+
+def insert_euronext(df, db:TSDB, path):
+    try:
+        # Récupération des marchés
+        markets = pd.DataFrame()
+        markets['name'] = df['Name']
+        markets['alias'] = None
+        markets['boursorama'] = None
+        markets['sws'] = None
+        markets['euronext'] = df['Market']
+        
+        # Récupération des entreprises
+        companies = pd.DataFrame()
+        companies["name"] = df['Name']
+        companies["mid"] = None #stands for Market Id --  m_id -- mid
+        companies["symbol"] = df['Symbol']
+        companies["isin"] = df["ISIN"]
+        companies["boursorama"] = None
+        companies["euronext"] = df["Market"]
+        companies["pea"] = False
+        companies["sector1"] = None
+        companies["sector2"] = None
+        companies["sector3"] = None
+
+            #-------------------------------------------------------------------------------------------
+        # Adding market
+        existing_markets = db.df_query("SELECT name, euronext FROM markets")
+
+        # Filtrer uniquement les nouveaux marchés
+        new_markets = markets[~markets.set_index(['name', 'euronext']) #Set name and euronext as index (a company can have multiple euronext)
+                                .index.isin(existing_markets.set_index(['name', 'euronext']).index)] #Return a table of bool showing the presence 
+
+        if not new_markets.empty:
+            try:
+                db.df_write(new_markets, 'markets')
+            except Exception as e:
+                print("Erreur lors de l'insertion des marchés:", e)
+        else:
+            print("Aucun nouveau marché à insérer.")
+        
+        #-------------------------------------------------------------------------------------------
+        # Adding companies
+
+        # Associer chaque entreprise à l'ID du marché correspondant
+        existing_markets = db.df_query("SELECT id, name, euronext FROM markets")
+
+        # Mapper les marchés existants pour obtenir les IDs
+        market_map = existing_markets.set_index(['name', 'euronext'])['id'].to_dict()
+        companies['mid'] = companies.apply(lambda row: market_map.get((row['name'], row['euronext'])), axis=1)
+        
+        # Insérer uniquement les nouvelles sociétés
+        existing_companies = db.df_query("SELECT isin FROM companies")
+        new_companies = companies[~companies.set_index('isin').index.isin(existing_companies.set_index('isin').index)]
+
+        if not new_companies.empty and new_companies["mid"].notna().all():
+            try:
+                db.df_write(new_companies, 'companies')
+            except Exception as e:
+                print("Erreur lors de l'insertion des companies:", e)
+        else:
+            print("Aucune nouvelle companie à ajouter.")
+
+        print(f"Fichier Euronext {path} indexé avec succès.")
+    except Exception as e:
+            print(f"Erreur SQL avec {path}: {e}")
+            #db.connection.rollback()
 
 @timer_decorator
 def store_files(start:str, end:str, website:str, db:TSDB):
@@ -78,6 +162,7 @@ def store_files(start:str, end:str, website:str, db:TSDB):
         
         df = pd.DataFrame()
         headers = []
+
         if website == "euronext":
             path = find_euronext(date)
             if path == None: #coudln't read file
@@ -87,28 +172,22 @@ def store_files(start:str, end:str, website:str, db:TSDB):
             if headers == None:
                 continue
 
+            insert_euronext(df, db, path)
+
         if website == "boursorama":
-            path = find_boursorama(date)
-            if path == None:
+            files = find_boursorama(date)
+            if files == None or files == []:
                 continue
 
+            files.sort()
+            for file in files:
+                df, headers = read_boursorama(file)
+                print(headers)
+                print(df.head)
+                print()
+            
         try:
-            # Récupération des marchés
-            markets = pd.DataFrame()
-            markets['name'] = df[['Name']]
-            markets['alias'] = None #df['Symbol'].str.lower()
-            markets['boursorama'] = None
-            markets['sws'] = None
-            markets['euronext'] = df['Market']
-            
-            # Récupération des entreprises
-            #companies = df[['Name', 'ISIN', 'Symbol', 'Market']].drop_duplicates()
-            #companies['mid'] = companies['Market'].map(lambda x: db.market_id.get(x.lower(), 100))  # 100 = International si inconnu
-            #companies['boursorama'] = None
-            #companies['euronext'] = companies['Market']
-            #companies['pea'] = False
-            #companies[['sector1', 'sector2', 'sector3']] = None
-            
+            print("test")
             # Récupération des stocks journaliers
             #stocks = df[['Last Date/Time', 'ISIN', 'Last', 'Volume']].dropna()
             #stocks = stocks.rename(columns={'Last Date/Time': 'date', 'Last': 'value', 'Volume': 'volume'})
@@ -124,17 +203,9 @@ def store_files(start:str, end:str, website:str, db:TSDB):
             #daystocks['mean'] = (daystocks['High'] + daystocks['Low']) / 2
             #daystocks['std'] = None  # Peut être calculé plus tard
             #daystocks = daystocks.drop(columns=['ISIN']).dropna()
-
-            try:
-                db.df_write(markets, 'markets', commit=True)
-            except Exception as e:
-                print("Table market already exsits.")
-                
-            #db.df_write(companies, 'companies', if_exists='append')
+            
             #db.df_write(stocks, 'stocks', if_exists='append')
             #db.df_write(daystocks, 'daystocks', if_exists='append')
-
-            print(f"Fichier {path} indexé avec succès.")
 
         except Exception as e:
             print(f"Erreur SQL avec {path}: {e}")
@@ -147,5 +218,6 @@ if __name__ == '__main__':
     db._purge_database()
     db._setup_database()
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
-    store_files("2020-05-01", "2020-06-01", "euronext", db) # one month to test
+    #store_files("2020-05-01", "2020-06-01", "euronext", db) # one month to test
+    store_files("2020-05-01", "2020-06-01", "boursorama", db) # one month to test
     print("Done Extract Transform and Load")
