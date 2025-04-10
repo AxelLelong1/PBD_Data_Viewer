@@ -113,7 +113,30 @@ def insert_euronext(df, db:TSDB, path):
         companies["sector2"] = None
         companies["sector3"] = None
 
-            #-------------------------------------------------------------------------------------------
+        # Récupération des daystocks
+        daystocks = pd.DataFrame()
+        daystocks["date"] = pd.to_datetime(df["Last Date/Time"], format="%d/%m/%y %H:%M", errors="coerce")
+        
+        if daystocks["date"].isnull().any():
+            # Si des dates sont invalides, afficher et les supprimer (ou les gérer)
+            invalid_dates = daystocks[daystocks["date"].isnull()]
+            print(f"Attention, {len(invalid_dates)} lignes ont des dates invalides et seront supprimées.")
+            
+            # Supprimer les lignes avec des dates invalides
+            daystocks = daystocks.dropna(subset=["date"])
+
+        daystocks["cid"] = None
+        daystocks["open"] = pd.to_numeric(df["Open"].replace("-", pd.NA), errors="coerce")
+        daystocks["close"] = pd.to_numeric(df["Last"].replace("-", pd.NA), errors="coerce")
+        daystocks["high"] = pd.to_numeric(df["High"].replace("-", pd.NA), errors="coerce")
+        daystocks["low"] = pd.to_numeric(df["Low"].replace("-", pd.NA), errors="coerce")
+        daystocks["volume"] = pd.to_numeric(df["Volume"].replace("-", pd.NA), errors="coerce")
+        daystocks["mean"] = None
+        daystocks["std"] = None
+        daystocks["isin"] = df["ISIN"]
+        daystocks["euronext"] = df["Market"]
+
+        #-------------------------------------------------------------------------------------------
         # Adding market
         existing_markets = db.df_query("SELECT name, euronext FROM markets")
 
@@ -150,6 +173,38 @@ def insert_euronext(df, db:TSDB, path):
                 print("Erreur lors de l'insertion des companies:", e)
         else:
             print("Aucune nouvelle companie à ajouter.")
+
+        #-------------------------------------------------------------------------------------------
+        # Adding daystocks
+        company_id = db.df_query("SELECT id, isin, euronext FROM companies")
+
+        company_id_map = company_id.set_index(['isin', 'euronext'])['id'].to_dict()
+        daystocks['cid'] = daystocks.apply(lambda row: company_id_map.get((row['isin'], row['euronext'])), axis=1)
+        daystocks["cid"] = daystocks["cid"].astype("Int64")
+
+        daystocks.drop(columns=["isin", "euronext"], inplace=True)
+
+        daystocks["date"] = pd.to_datetime(df["Last Date/Time"], format="%d/%m/%y %H:%M", errors="coerce")
+        tz_map = {
+            "CET": "Europe/Paris",
+            "CEST": "Europe/Paris",
+            "UTC": "UTC",
+            "GMT": "Etc/GMT"
+        }
+
+        df["tz_full"] = df["Time Zone"].map(tz_map).fillna("Europe/Paris")
+
+        daystocks["date"] = [
+            pd.Timestamp(dt).tz_localize(tz)
+            for dt, tz in zip(daystocks["date"], df["tz_full"])
+        ]
+
+        daystocks.drop(columns=["tz_full"], inplace=True, errors="ignore")
+        if not daystocks.empty and daystocks["cid"].notna().all():
+            try:
+                db.df_write(daystocks, 'daystocks')
+            except Exception as e:
+                print("Erreur lors de l'insertion des stocks jounaliers:", e)
 
         print(f"Fichier Euronext {path} indexé avec succès.")
     except Exception as e:
@@ -218,6 +273,6 @@ if __name__ == '__main__':
     db._purge_database()
     db._setup_database()
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
-    #store_files("2020-05-01", "2020-06-01", "euronext", db) # one month to test
-    store_files("2020-05-01", "2020-06-01", "boursorama", db) # one month to test
+    store_files("2020-05-01", "2020-06-01", "euronext", db) # one month to test
+    #store_files("2020-05-01", "2020-06-01", "boursorama", db) # one month to test
     print("Done Extract Transform and Load")
