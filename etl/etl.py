@@ -116,14 +116,7 @@ def insert_euronext(df, db:TSDB, path):
         # Récupération des daystocks
         daystocks = pd.DataFrame()
         daystocks["date"] = pd.to_datetime(df["Last Date/Time"], format="%d/%m/%y %H:%M", errors="coerce")
-        
-        if daystocks["date"].isnull().any():
-            # Si des dates sont invalides, afficher et les supprimer (ou les gérer)
-            invalid_dates = daystocks[daystocks["date"].isnull()]
-            print(f"Attention, {len(invalid_dates)} lignes ont des dates invalides et seront supprimées.")
-            
-            # Supprimer les lignes avec des dates invalides
-            daystocks = daystocks.dropna(subset=["date"])
+        daystocks.dropna(subset=["date"], inplace=True)
 
         daystocks["cid"] = None
         daystocks["open"] = pd.to_numeric(df["Open"].replace("-", pd.NA), errors="coerce")
@@ -131,8 +124,8 @@ def insert_euronext(df, db:TSDB, path):
         daystocks["high"] = pd.to_numeric(df["High"].replace("-", pd.NA), errors="coerce")
         daystocks["low"] = pd.to_numeric(df["Low"].replace("-", pd.NA), errors="coerce")
         daystocks["volume"] = pd.to_numeric(df["Volume"].replace("-", pd.NA), errors="coerce")
-        daystocks["mean"] = None
-        daystocks["std"] = None
+        daystocks["mean"] = pd.to_numeric(df["Turnover"].replace("-", pd.NA), errors="coerce") / daystocks["volume"]
+        daystocks["std"] = daystocks[["open", "high", "low", "close"]].std(axis=1)
         daystocks["isin"] = df["ISIN"]
         daystocks["euronext"] = df["Market"]
 
