@@ -1,11 +1,10 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import re
 import sklearn
+from zipfile import ZipFile
 import glob
 import time
-import re
 import mylogging
 import os
 import timescaledb_model as tsdb
@@ -58,7 +57,6 @@ def find_boursorama(date):
                 matching_files.append(full_path)
 
     if not matching_files:
-        print(f"Aucun fichier Boursorama trouvé pour la date {d}.")
         return None
 
     return matching_files
@@ -66,29 +64,32 @@ def find_boursorama(date):
 def read_boursorama(path):
     try:
         df = pd.read_pickle(path)
-        headers = df.columns.tolist()
-        return df, headers
+        return df
     except Exception as e:
-        print(f"Erreur lors de la lecture de {path}: {e}")
-        return None, None
+        return None
 
 
 def find_euronext(date):
     date = date.isoformat()
     path = os.path.join(HOME, "euronext", f"Euronext_Equities_{date}.csv")
     if not os.path.exists(path):
-        print(f"Fichier Euronext {path} introuvable.")
-        return None
+        path = os.path.join(HOME, "euronext", f"Euronext_Equities_{date}.xlsx")
+        if not os.path.exists(path):
+            print(f"Fichier Euronext {date} introuvable.")
+            return None
     return path
 
 def read_euronext(path):
     try:
-        df = pd.read_csv(path, sep='\t', skiprows=[1,2,3])
-        headers = df.columns.tolist()
-        return df, headers
+        df = pd.DataFrame()
+        if (path.split('.')[-1] == "csv"):
+            df = pd.read_csv(path, sep='\t', skiprows=[1,2,3])
+        else:
+            df = pd.read_excel(path, skiprows=[1,2,3])
+        return df
     except Exception as e:
-        print(f"Erreur lors de la lecture de {path}: {e}")
-        return None, None
+        print(e)
+        return None
 
 def insert_euronext(df, db:TSDB, path):
     try:
@@ -142,9 +143,7 @@ def insert_euronext(df, db:TSDB, path):
                 db.df_write(new_markets, 'markets')
             except Exception as e:
                 print("Erreur lors de l'insertion des marchés:", e)
-        else:
-            print("Aucun nouveau marché à insérer.")
-        
+
         #-------------------------------------------------------------------------------------------
         # Adding companies
 
@@ -164,8 +163,6 @@ def insert_euronext(df, db:TSDB, path):
                 db.df_write(new_companies, 'companies')
             except Exception as e:
                 print("Erreur lors de l'insertion des companies:", e)
-        else:
-            print("Aucune nouvelle companie à ajouter.")
 
         #-------------------------------------------------------------------------------------------
         # Adding daystocks
@@ -199,65 +196,110 @@ def insert_euronext(df, db:TSDB, path):
             except Exception as e:
                 print("Erreur lors de l'insertion des stocks jounaliers:", e)
 
-        print(f"Fichier Euronext {path} indexé avec succès.")
     except Exception as e:
             print(f"Erreur SQL avec {path}: {e}")
             #db.connection.rollback()
 
+def parse_price(val):
+    if pd.isna(val):
+        return None
+    val = str(val).strip()
+    if '(c)' in val:
+        return float(val.replace('(c)', '').replace(' ', '').replace(',', '.').strip()) / 100
+    elif '(s)' in val:
+        return float(val.replace('(s)', '').replace(' ', '').replace(',', '.'))
+    else:
+        return float(val.replace(' ', '').replace(',', '.'))
+
+def get_bousorama_date(path):
+    # On découpe le chemin par les espaces
+    filename = path.split("/")[-1]  # => "compB 2020-05-04 17:32:01.848062.bz2"
+    parts = filename.split()          # => ["compB", "2020-05-04", "17:32:01.848062.bz2"]
+
+    # On extrait la date et l'heure
+    date_part = parts[1]              # "2020-05-04"
+    time_part = parts[2].split(".bz2")[0]  # "17:32:01.848062"
+
+    # Fusion et conversion en datetime
+    timestamp_str = f"{date_part} {time_part}"
+    timestamp = datetime.fromisoformat(timestamp_str)
+
+    return timestamp
+
+def insert_boursorama(df, db, path, company_id_map):
+    stocks = pd.DataFrame()
+    
+    stocks['value'] =  df['last'].apply(parse_price)
+    stocks['volume'] =  pd.to_numeric(df['volume'])
+    stocks['date'] = get_bousorama_date(path)
+    stocks['symbol'] = df['symbol']
+
+    stocks['cid'] = stocks.apply(lambda row: company_id_map.get((row['symbol'])), axis=1)
+    stocks["cid"] = stocks["cid"].astype("Int64")
+
+    stocks.drop(columns=["symbol"], inplace=True)
+
+    print(get_bousorama_date(path), " Bourso indexe")
+    return stocks
+
+
 @timer_decorator
 def store_files(start:str, end:str, website:str, db:TSDB):
+    stocks = []
+    if (website == "boursorama"): # sera forcément demandé après indexation des companies
+        company_id = db.df_query("SELECT id, symbol FROM companies")
+        company_id_map = company_id.set_index(['symbol'])['id'].to_dict()
+
     for date in daterange(datetime.strptime(start, "%Y-%m-%d").date(), datetime.strptime(end, "%Y-%m-%d").date()):
-        
         df = pd.DataFrame()
-        headers = []
 
         if website == "euronext":
             path = find_euronext(date)
             if path == None: #coudln't read file
                 continue
 
-            df, headers = read_euronext(path)
-            if headers == None:
+            df = read_euronext(path)
+            if df.empty:
+                print("DF EMPTY")
                 continue
+
+            print(df)
 
             insert_euronext(df, db, path)
 
         if website == "boursorama":
+
             files = find_boursorama(date)
             if files == None or files == []:
                 continue
 
+            stocks = []
+            #sorting :D
             files.sort()
-            for file in files:
-                df, headers = read_boursorama(file)
-                print(headers)
-                print(df.head)
-                print()
-            
-        try:
-            print("test")
-            # Récupération des stocks journaliers
-            #stocks = df[['Last Date/Time', 'ISIN', 'Last', 'Volume']].dropna()
-            #stocks = stocks.rename(columns={'Last Date/Time': 'date', 'Last': 'value', 'Volume': 'volume'})
-            #stocks['date'] = pd.to_datetime(stocks['date'])
-            #stocks['cid'] = stocks['ISIN'].map(lambda x: db.df_query(f"SELECT id FROM companies WHERE isin='{x}'").values[0][0] if x in companies['ISIN'].values else None)
-            #stocks = stocks.drop(columns=['ISIN']).dropna()
-            
-            # Récupération des daystocks
-            #daystocks = df[['Last Date/Time', 'ISIN', 'Open', 'High', 'Low', 'Last', 'Volume']].dropna()
-            #daystocks = daystocks.rename(columns={'Last Date/Time': 'date', 'Last': 'close'})
-            #daystocks['date'] = pd.to_datetime(daystocks['date'])
-            #daystocks['cid'] = daystocks['ISIN'].map(lambda x: db.df_query(f"SELECT id FROM companies WHERE isin='{x}'").values[0][0] if x in companies['ISIN'].values else None)
-            #daystocks['mean'] = (daystocks['High'] + daystocks['Low']) / 2
-            #daystocks['std'] = None  # Peut être calculé plus tard
-            #daystocks = daystocks.drop(columns=['ISIN']).dropna()
-            
-            #db.df_write(stocks, 'stocks', if_exists='append')
-            #db.df_write(daystocks, 'daystocks', if_exists='append')
 
+            for file in files:
+                # for each file detected that month, create and concatenate the stocks DataFrame
+                df = read_boursorama(file)
+                if df.empty:
+                    continue
+
+                #on append les stocks généres
+                stocks.append(insert_boursorama(df, db, file, company_id_map))
+            
+    
+    if(website == "boursorama"): #same thing
+        s = pd.concat(stocks, ignore_index=True)
+
+        # on insert tous les stocks générés pour plus d'efficacité
+        try:
+            db.df_write(s, 'stocks')
         except Exception as e:
-            print(f"Erreur SQL avec {path}: {e}")
-            #db.connection.rollback()
+            print("Erreur lors de l'insertion des stocks bourorama:", e)
+    
+    return
+
+
+
 
 if __name__ == '__main__':
     print("Go Extract Transform and Load")
@@ -266,6 +308,6 @@ if __name__ == '__main__':
     db._purge_database()
     db._setup_database()
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
-    store_files("2020-05-01", "2020-06-01", "euronext", db) # one month to test
-    #store_files("2020-05-01", "2020-06-01", "boursorama", db) # one month to test
+    store_files("2022-10-20", "2025-01-01", "euronext", db)
+    store_files("2022-01-01", "2025-01-01", "boursorama", db)
     print("Done Extract Transform and Load")
