@@ -93,9 +93,7 @@ def read_euronext(path):
     
 def get_euronext_date(path):
     date = path.split('_')[-1].split('.')[0]
-    print(date)
     res = datetime.fromisoformat(date)
-    print(res)
     return res 
 
 def insert_euronext_csv(df, db:TSDB, path):
@@ -123,8 +121,7 @@ def insert_euronext_csv(df, db:TSDB, path):
 
         # Récupération des daystocks
         daystocks = pd.DataFrame()
-        daystocks["date"] = get_euronext_date(path)
-
+        
         daystocks["cid"] = None
         daystocks["open"] = pd.to_numeric(df["Open"].replace("-", pd.NA), errors="coerce")
         daystocks["close"] = pd.to_numeric(df["Last"].replace("-", pd.NA), errors="coerce")
@@ -135,6 +132,7 @@ def insert_euronext_csv(df, db:TSDB, path):
         daystocks["std"] = daystocks[["open", "high", "low", "close"]].std(axis=1)
         daystocks["isin"] = df["ISIN"]
         daystocks["euronext"] = df["Market"]
+        daystocks["date"] = get_euronext_date(path)
 
         #-------------------------------------------------------------------------------------------
         # Adding market
@@ -215,8 +213,7 @@ def insert_euronext_xlsx(df, db:TSDB, path):
 
         # Récupération des daystocks
         daystocks = pd.DataFrame()
-        daystocks["date"] = get_euronext_date(path)
-
+        
         daystocks["cid"] = None
         daystocks["open"] = pd.to_numeric(df["Open Price"].replace("-", pd.NA), errors="coerce")
         daystocks["close"] = pd.to_numeric(df["last Price"].replace("-", pd.NA), errors="coerce")
@@ -227,6 +224,7 @@ def insert_euronext_xlsx(df, db:TSDB, path):
         daystocks["std"] = daystocks[["open", "high", "low", "close"]].std(axis=1)
         daystocks["isin"] = df["ISIN"]
         daystocks["euronext"] = df["Market"]
+        daystocks["date"] = get_euronext_date(path)
 
         #-------------------------------------------------------------------------------------------
         # Adding market
@@ -392,6 +390,6 @@ if __name__ == '__main__':
     db._purge_database()
     db._setup_database()
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
-    store_files("2021-10-20", "2025-01-01", "euronext", db)
-    store_files("2022-01-01", "2025-01-01", "boursorama", db)
+    store_files("2019-01-01", "2025-01-01", "euronext", db)
+    store_files("2019-01-01", "2025-01-01", "boursorama", db)
     print("Done Extract Transform and Load")
