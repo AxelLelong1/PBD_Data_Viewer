@@ -33,7 +33,7 @@ services:
     networks:
       - boursenet
     volumes:
-      - /home/axel/bourse/data:/home/bourse/data/
+      - /home/owen/bourse/data:/home/bourse/data/
 
   dashboard:
     image: my_dashboard

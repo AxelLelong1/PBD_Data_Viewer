@@ -260,10 +260,7 @@ def store_files(start:str, end:str, website:str, db:TSDB):
 
             df = read_euronext(path)
             if df.empty:
-                print("DF EMPTY")
                 continue
-
-            print(df)
 
             insert_euronext(df, db, path)
 
