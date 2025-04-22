@@ -90,8 +90,15 @@ def read_euronext(path):
     except Exception as e:
         print(e)
         return None
+    
+def get_euronext_date(path):
+    date = path.split('_')[-1].split('.')[0]
+    print(date)
+    res = datetime.fromisoformat(date)
+    print(res)
+    return res 
 
-def insert_euronext(df, db:TSDB, path):
+def insert_euronext_csv(df, db:TSDB, path):
     try:
         # Récupération des marchés
         markets = pd.DataFrame()
@@ -116,8 +123,7 @@ def insert_euronext(df, db:TSDB, path):
 
         # Récupération des daystocks
         daystocks = pd.DataFrame()
-        daystocks["date"] = pd.to_datetime(df["Last Date/Time"], format="%d/%m/%y %H:%M", errors="coerce")
-        daystocks.dropna(subset=["date"], inplace=True)
+        daystocks["date"] = get_euronext_date(path)
 
         daystocks["cid"] = None
         daystocks["open"] = pd.to_numeric(df["Open"].replace("-", pd.NA), errors="coerce")
@@ -174,22 +180,98 @@ def insert_euronext(df, db:TSDB, path):
 
         daystocks.drop(columns=["isin", "euronext"], inplace=True)
 
-        daystocks["date"] = pd.to_datetime(df["Last Date/Time"], format="%d/%m/%y %H:%M", errors="coerce")
-        tz_map = {
-            "CET": "Europe/Paris",
-            "CEST": "Europe/Paris",
-            "UTC": "UTC",
-            "GMT": "Etc/GMT"
-        }
+        if not daystocks.empty and daystocks["cid"].notna().all():
+            try:
+                db.df_write(daystocks, 'daystocks')
+            except Exception as e:
+                print("Erreur lors de l'insertion des stocks jounaliers:", e)
 
-        df["tz_full"] = df["Time Zone"].map(tz_map).fillna("Europe/Paris")
+    except Exception as e:
+            print(f"Erreur SQL avec {path}: {e}")
+            #db.connection.rollback()
 
-        daystocks["date"] = [
-            pd.Timestamp(dt).tz_localize(tz)
-            for dt, tz in zip(daystocks["date"], df["tz_full"])
-        ]
+def insert_euronext_xlsx(df, db:TSDB, path):
+    try:
+        # Récupération des marchés
+        markets = pd.DataFrame()
+        markets['name'] = df['Name']
+        markets['alias'] = None
+        markets['boursorama'] = None
+        markets['sws'] = None
+        markets['euronext'] = df['Market']
+        
+        # Récupération des entreprises
+        companies = pd.DataFrame()
+        companies["name"] = df['Name']
+        companies["mid"] = None #stands for Market Id --  m_id -- mid
+        companies["symbol"] = df['Symbol']
+        companies["isin"] = df["ISIN"]
+        companies["boursorama"] = None
+        companies["euronext"] = df["Market"]
+        companies["pea"] = False
+        companies["sector1"] = None
+        companies["sector2"] = None
+        companies["sector3"] = None
 
-        daystocks.drop(columns=["tz_full"], inplace=True, errors="ignore")
+        # Récupération des daystocks
+        daystocks = pd.DataFrame()
+        daystocks["date"] = get_euronext_date(path)
+
+        daystocks["cid"] = None
+        daystocks["open"] = pd.to_numeric(df["Open Price"].replace("-", pd.NA), errors="coerce")
+        daystocks["close"] = pd.to_numeric(df["last Price"].replace("-", pd.NA), errors="coerce")
+        daystocks["high"] = pd.to_numeric(df["High Price"].replace("-", pd.NA), errors="coerce")
+        daystocks["low"] = pd.to_numeric(df["low Price"].replace("-", pd.NA), errors="coerce")
+        daystocks["volume"] = pd.to_numeric(df["Volume"].replace("-", pd.NA), errors="coerce")
+        daystocks["mean"] = pd.to_numeric(df["Turnover"].replace("-", pd.NA), errors="coerce") / daystocks["volume"]
+        daystocks["std"] = daystocks[["open", "high", "low", "close"]].std(axis=1)
+        daystocks["isin"] = df["ISIN"]
+        daystocks["euronext"] = df["Market"]
+
+        #-------------------------------------------------------------------------------------------
+        # Adding market
+        existing_markets = db.df_query("SELECT name, euronext FROM markets")
+
+        # Filtrer uniquement les nouveaux marchés
+        new_markets = markets[~markets.set_index(['name', 'euronext']) #Set name and euronext as index (a company can have multiple euronext)
+                                .index.isin(existing_markets.set_index(['name', 'euronext']).index)] #Return a table of bool showing the presence 
+
+        if not new_markets.empty:
+            try:
+                db.df_write(new_markets, 'markets')
+            except Exception as e:
+                print("Erreur lors de l'insertion des marchés:", e)
+
+        #-------------------------------------------------------------------------------------------
+        # Adding companies
+
+        # Associer chaque entreprise à l'ID du marché correspondant
+        existing_markets = db.df_query("SELECT id, name, euronext FROM markets")
+
+        # Mapper les marchés existants pour obtenir les IDs
+        market_map = existing_markets.set_index(['name', 'euronext'])['id'].to_dict()
+        companies['mid'] = companies.apply(lambda row: market_map.get((row['name'], row['euronext'])), axis=1)
+        
+        # Insérer uniquement les nouvelles sociétés
+        existing_companies = db.df_query("SELECT isin FROM companies")
+        new_companies = companies[~companies.set_index('isin').index.isin(existing_companies.set_index('isin').index)]
+
+        if not new_companies.empty and new_companies["mid"].notna().all():
+            try:
+                db.df_write(new_companies, 'companies')
+            except Exception as e:
+                print("Erreur lors de l'insertion des companies:", e)
+
+        #-------------------------------------------------------------------------------------------
+        # Adding daystocks
+        company_id = db.df_query("SELECT id, isin, euronext FROM companies")
+
+        company_id_map = company_id.set_index(['isin', 'euronext'])['id'].to_dict()
+        daystocks['cid'] = daystocks.apply(lambda row: company_id_map.get((row['isin'], row['euronext'])), axis=1)
+        daystocks["cid"] = daystocks["cid"].astype("Int64")
+
+        daystocks.drop(columns=["isin", "euronext"], inplace=True)
+
         if not daystocks.empty and daystocks["cid"].notna().all():
             try:
                 db.df_write(daystocks, 'daystocks')
@@ -262,7 +344,12 @@ def store_files(start:str, end:str, website:str, db:TSDB):
             if df.empty:
                 continue
 
-            insert_euronext(df, db, path)
+            ext = path.split('.')[-1]
+
+            if (ext == "csv"):
+                insert_euronext_csv(df, db, path)
+            else:
+                insert_euronext_xlsx(df, db, path)
 
         if website == "boursorama":
 
@@ -305,6 +392,6 @@ if __name__ == '__main__':
     db._purge_database()
     db._setup_database()
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
-    store_files("2022-10-20", "2025-01-01", "euronext", db)
+    store_files("2021-10-20", "2025-01-01", "euronext", db)
     store_files("2022-01-01", "2025-01-01", "boursorama", db)
     print("Done Extract Transform and Load")
