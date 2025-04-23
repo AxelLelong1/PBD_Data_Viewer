@@ -288,6 +288,8 @@ class TimescaleStockMarketModel:
 
                 # Insert initial market data
                 self._insert_data("markets", initial_markets_data)
+                cursor = self.connection.cursor()
+                cursor.execute("SELECT setval('market_id_seq', (SELECT MAX(id) FROM markets));")
                 self.connection.commit()
         except Exception as e:
             self.logger.exception("SQL error: %s" % e)
