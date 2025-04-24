@@ -320,6 +320,12 @@ def get_bousorama_date(path):
 
     return timestamp
 
+def find_company_id(symbol, company_id_map):
+    for key in company_id_map:
+        if key in symbol:
+            return company_id_map[key]
+    return None
+
 def insert_boursorama(df, db, path, company_id_map):
     stocks = pd.DataFrame()
     
@@ -328,10 +334,12 @@ def insert_boursorama(df, db, path, company_id_map):
     stocks['date'] = get_bousorama_date(path)
     stocks['symbol'] = df['symbol']
 
-    stocks['cid'] = stocks.apply(lambda row: company_id_map.get((row['symbol'])), axis=1)
+    stocks['cid'] = stocks.apply(lambda row: find_company_id(row["symbol"], company_id_map), axis=1)
     stocks["cid"] = stocks["cid"].astype("Int64")
 
     stocks.drop(columns=["symbol"], inplace=True)
+
+
 
     print(get_bousorama_date(path), " Bourso indexe")
     return stocks
@@ -403,6 +411,6 @@ if __name__ == '__main__':
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
     db._purge_database()
     db._setup_database()
-    store_files("2019-01-01", "2022-01-01", "euronext", db)
-    store_files("2019-01-01", "2022-01-01", "boursorama", db)
+    store_files("2020-05-01", "2020-05-30", "euronext", db)
+    store_files("2020-05-01", "2020-05-30", "boursorama", db)
     print("Done Extract Transform and Load")
