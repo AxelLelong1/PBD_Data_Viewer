@@ -100,11 +100,11 @@ def insert_euronext_csv(df, db:TSDB, path):
     try:
         # Récupération des marchés
         markets = pd.DataFrame()
-        markets['name'] = df['Name']
+        markets['name'] = df['Market']
         markets['alias'] = None
         markets['boursorama'] = None
         markets['sws'] = None
-        markets['euronext'] = df['Market']
+        markets['euronext'] = None
         
         # Récupération des entreprises
         companies = pd.DataFrame()
@@ -135,12 +135,11 @@ def insert_euronext_csv(df, db:TSDB, path):
         daystocks["date"] = get_euronext_date(path)
 
         #-------------------------------------------------------------------------------------------
+        
         # Adding market
-        existing_markets = db.df_query("SELECT name, euronext FROM markets")
-
-        # Filtrer uniquement les nouveaux marchés
-        new_markets = markets[~markets.set_index(['name', 'euronext']) #Set name and euronext as index (a company can have multiple euronext)
-                                .index.isin(existing_markets.set_index(['name', 'euronext']).index)] #Return a table of bool showing the presence 
+        markets.drop_duplicates(subset='name', inplace=True)
+        existing_names = db.df_query("SELECT name FROM markets")['name'].dropna().unique()
+        new_markets = markets[~markets['name'].isin(existing_names)]
 
         if not new_markets.empty:
             try:
@@ -152,7 +151,7 @@ def insert_euronext_csv(df, db:TSDB, path):
         # Adding companies
 
         # Associer chaque entreprise à l'ID du marché correspondant
-        existing_markets = db.df_query("SELECT id, name, euronext FROM markets")
+        existing_markets = db.df_query("SELECT id, name FROM markets")
 
         # Insérer uniquement les nouvelles sociétés
         existing_companies = db.df_query("SELECT name, euronext FROM companies")
@@ -162,8 +161,8 @@ def insert_euronext_csv(df, db:TSDB, path):
             existing_companies[['name', 'euronext']].apply(tuple, axis=1))]
 
         # Mapper les marchés existants pour obtenir les IDs
-        market_map = existing_markets.set_index(['name', 'euronext'])['id'].to_dict()
-        companies['mid'] = companies.apply(lambda row: market_map.get((row['name'], row['euronext'])), axis=1)
+        market_map = existing_markets.set_index(['name'])['id'].to_dict()
+        companies['mid'] = companies.apply(lambda row: market_map.get((row['euronext'])), axis=1)
         companies['mid'] = companies['mid'].astype("Int64")
         
         if not companies.empty:
@@ -179,11 +178,6 @@ def insert_euronext_csv(df, db:TSDB, path):
         company_id_map = company_id.set_index(['name', 'euronext'])['id'].to_dict()
         daystocks['cid'] = daystocks.apply(lambda row: company_id_map.get((row['name'], row['euronext'])), axis=1)
         daystocks["cid"] = daystocks["cid"].astype("Int64")
-
-        null_cid_rows = daystocks[daystocks['cid'].isna()]
-        print("Lignes avec CID nul :")
-        print(null_cid_rows)
-        #print(company_id_map.get(("FR0013529815", "Euronext Paris")))
 
         daystocks.drop(columns=["euronext", "name"], inplace=True)
 
@@ -202,11 +196,11 @@ def insert_euronext_xlsx(df, db:TSDB, path):
     try:
         # Récupération des marchés
         markets = pd.DataFrame()
-        markets['name'] = df['Name']
+        markets['name'] = df['Market']
         markets['alias'] = None
         markets['boursorama'] = None
         markets['sws'] = None
-        markets['euronext'] = df['Market']
+        markets['euronext'] = None
         
         # Récupération des entreprises
         companies = pd.DataFrame()
@@ -238,11 +232,11 @@ def insert_euronext_xlsx(df, db:TSDB, path):
 
         #-------------------------------------------------------------------------------------------
         # Adding market
-        existing_markets = db.df_query("SELECT name, euronext FROM markets")
+        existing_markets = db.df_query("SELECT name FROM markets")
 
         # Filtrer uniquement les nouveaux marchés
-        new_markets = markets[~markets.set_index(['name', 'euronext']) #Set name and euronext as index (a company can have multiple euronext)
-                                .index.isin(existing_markets.set_index(['name', 'euronext']).index)] #Return a table of bool showing the presence 
+        new_markets = markets[~markets.set_index(['name']) #Set name and euronext as index (a company can have multiple euronext)
+                                .index.isin(existing_markets.set_index(['name']).index)] #Return a table of bool showing the presence 
 
         if not new_markets.empty:
             try:
@@ -254,11 +248,11 @@ def insert_euronext_xlsx(df, db:TSDB, path):
         # Adding companies
 
         # Associer chaque entreprise à l'ID du marché correspondant
-        existing_markets = db.df_query("SELECT id, name, euronext FROM markets")
+        existing_markets = db.df_query("SELECT id, name FROM markets")
 
         # Mapper les marchés existants pour obtenir les IDs
-        market_map = existing_markets.set_index(['name', 'euronext'])['id'].to_dict()
-        companies['mid'] = companies.apply(lambda row: market_map.get((row['name'], row['euronext'])), axis=1)
+        market_map = existing_markets.set_index(['name'])['id'].to_dict()
+        companies['mid'] = companies.apply(lambda row: market_map.get((row['euronext'])), axis=1)
         
         # Insérer uniquement les nouvelles sociétés
         existing_companies = db.df_query("SELECT name, euronext FROM companies")
