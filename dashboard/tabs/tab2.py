@@ -15,7 +15,7 @@ tab2_layout = html.Div([
             html.Label("Choisir une action :"),
             dcc.Dropdown(
                 id='stock-dropdown',
-                options=[{'label': row['name'], 'value': row['id']} for _, row in companies.iterrows()],
+                options=[],
                 multi=False
             ),
         ], width=6),
@@ -47,6 +47,24 @@ tab2_layout = html.Div([
         page_size=20,
     )
 ])
+@app.callback(
+    ddep.Output('stock-dropdown', 'options'),
+    ddep.Input('tabs-example', 'active_tab')
+)
+def load_stock_options(active_tab):
+    if active_tab != 'tab-2':
+        return []
+
+    df = db.df_query("""
+        SELECT id, name
+        FROM companies
+        JOIN daystocks ON daystocks.cid = id
+        GROUP BY id, name
+    """)
+    
+    options = [{'label': row['name'], 'value': row['id']} for _, row in df.iterrows()]
+    print("✅ Options 'dropdown' chargées dynamiquement :", options)
+    return options
 
 @app.callback(
     ddep.Output('stock-data-table', 'data'),

@@ -14,6 +14,7 @@ from app import app, db
 
 # Création de la présentation Dash
 layout = dbc.Container([
+    dcc.Location(id="url", refresh=False),
     html.H1("Un joli titre"),
     dbc.Tabs(
         id="tabs-example",
