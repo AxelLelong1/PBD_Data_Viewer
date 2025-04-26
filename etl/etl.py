@@ -317,11 +317,11 @@ def parse_price(val):
         return None
     val = str(val).strip()
     if '(c)' in val:
-        return float(val.replace('(c)', '').replace(' ', '').replace(',', '.').strip())# / 100
+        return float(val.replace('(c)', '').replace(' ', '').replace(',', '.').strip()) #nettoyage
     elif '(s)' in val:
-        return float(val.replace('(s)', '').replace(' ', '').replace(',', '.'))
+        return float(val.replace('(s)', '').replace(' ', '').replace(',', '.')) #nettoyage
     else:
-        return float(val.replace(' ', '').replace(',', '.'))
+        return float(val.replace(' ', '').replace(',', '.')) #nettoyage
 
 def get_bousorama_date(path):
     # On découpe le chemin par les espaces
@@ -337,12 +337,6 @@ def get_bousorama_date(path):
     timestamp = datetime.fromisoformat(timestamp_str)
 
     return timestamp
-
-def find_company_id(symbol, company_id_map):
-    for key in company_id_map:
-        if key in symbol:
-            return company_id_map[key]
-    return None
 
 def create_key(boursorama, symbol):
     if '*' in boursorama:
@@ -360,9 +354,6 @@ def insert_boursorama(df, db, path, company_id_map):
     stocks['date'] = date
     stocks['symbol'] = df['symbol']
 
-    # TODO: link with boursorama prefix, should work better or the same at least
-
-    #stocks['cid'] = stocks.apply(lambda row: find_company_id(row["symbol"], company_id_map), axis=1)
     stocks['cid'] = list(zip(stocks['symbol']))
     stocks['cid'] = stocks['symbol'].map(company_id_map)
     stocks["cid"] = stocks["cid"].astype("Int64")
@@ -447,6 +438,6 @@ if __name__ == '__main__':
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
     db._purge_database()
     db._setup_database()
-    store_files("2018-05-01", "2025-05-30", "euronext", db)
-    store_files("2018-05-01", "2025-05-30", "boursorama", db)
+    store_files("2020-01-01", "2021-01-01", "euronext", db) #un an pour tester, à changer si besoin
+    store_files("2020-01-01", "2021-01-01", "boursorama", db)
     print("Done Extract Transform and Load")
