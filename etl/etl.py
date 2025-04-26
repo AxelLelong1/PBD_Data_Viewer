@@ -39,6 +39,7 @@ def timer_decorator(func):
 # 
 
 def daterange(start_date, end_date):
+    #return pd.date_range(start=start_date, end=end_date).to_pydatetime()
     current_date = start_date
     while current_date <= end_date:
         yield current_date
@@ -96,23 +97,29 @@ def get_euronext_date(path):
     res = datetime.fromisoformat(date)
     return res 
 
-def insert_euronext_csv(df, db:TSDB, path):
+def get_euronext(euronext):
+    result = []
+
+    if "Paris" in euronext:
+        result.append("Paris")
+    if "Brussels" in euronext:
+        result.append("Bruxelle")
+    if "Amsterdam" in euronext:
+        result.append("Amsterdam")
+    if "London" in euronext:
+        result.append("London Stock Exchange")
+    if "Dublin" in euronext:
+        result.append("Paris")
+    return result
+
+def insert_euronext_csv(df, db:TSDB, path, existing_markets):
     try:
-        # Récupération des marchés
-        markets = pd.DataFrame()
-        markets['name'] = df['Market']
-        markets['alias'] = None
-        markets['boursorama'] = None
-        markets['sws'] = None
-        markets['euronext'] = None
-        
         # Récupération des entreprises
         companies = pd.DataFrame()
         companies["name"] = df['Name']
         companies["mid"] = None #stands for Market Id --  m_id -- mid
         companies["symbol"] = df['Symbol']
         companies["isin"] = df["ISIN"]
-        companies["boursorama"] = None
         companies["euronext"] = df["Market"]
         companies["pea"] = False
         companies["sector1"] = None
@@ -135,23 +142,35 @@ def insert_euronext_csv(df, db:TSDB, path):
         daystocks["date"] = get_euronext_date(path)
 
         #-------------------------------------------------------------------------------------------
-        
-        # Adding market
-        markets.drop_duplicates(subset='name', inplace=True)
-        existing_names = db.df_query("SELECT name FROM markets")['name'].dropna().unique()
-        new_markets = markets[~markets['name'].isin(existing_names)]
-
-        if not new_markets.empty:
-            try:
-                db.df_write(new_markets, 'markets')     
-            except Exception as e:
-                print("Erreur lors de l'insertion des marchés:", e)
-
-        #-------------------------------------------------------------------------------------------
         # Adding companies
 
-        # Associer chaque entreprise à l'ID du marché correspondant
-        existing_markets = db.df_query("SELECT id, name FROM markets")
+        companies['market_names'] = companies['euronext'].apply(get_euronext)
+        
+        # Mapper les noms vers des IDs
+        market_map = existing_markets.set_index('name')['id'].to_dict()
+        companies['market_ids'] = companies['market_names'].apply(
+            lambda names: [market_map[name] for name in names]
+        )
+
+        # Supprimer les lignes sans marché reconnu (si besoin)
+        companies = companies[companies['market_ids'].map(len) > 0]
+
+        # Dupliquer les lignes : une par marché
+        companies = companies.explode('market_ids')
+        companies['mid'] = companies['market_ids'].astype("Int64")
+
+        companies = companies.drop(columns=['market_names', 'market_ids'])
+        
+        market_fields = existing_markets[['id', 'boursorama']].rename(columns={
+            'id': 'mid', 
+        })
+        companies = companies.merge(market_fields, on='mid', how='left')
+
+        # Retrouve le bon Euronext en inversant la map
+        id_to_market = {v: k for k, v in market_map.items()}
+
+        # Remplir la colonne euronext avec le nom du marché correspondant à l’ID
+        companies['euronext'] = companies['mid'].map(id_to_market)
 
         # Insérer uniquement les nouvelles sociétés
         existing_companies = db.df_query("SELECT name, euronext FROM companies")
@@ -159,11 +178,6 @@ def insert_euronext_csv(df, db:TSDB, path):
         # Filtre les nouvelles sociétés basées sur (name, euronext)
         companies = companies[~companies[['name', 'euronext']].apply(tuple, axis=1).isin(
             existing_companies[['name', 'euronext']].apply(tuple, axis=1))]
-
-        # Mapper les marchés existants pour obtenir les IDs
-        market_map = existing_markets.set_index(['name'])['id'].to_dict()
-        companies['mid'] = companies.apply(lambda row: market_map.get((row['euronext'])), axis=1)
-        companies['mid'] = companies['mid'].astype("Int64")
         
         if not companies.empty:
             try:
@@ -173,10 +187,16 @@ def insert_euronext_csv(df, db:TSDB, path):
 
         #-------------------------------------------------------------------------------------------
         # Adding daystocks
+
+        # Explode for each euronext
+        daystocks['euronext'] = daystocks['euronext'].apply(get_euronext)
+        daystocks = daystocks.explode('euronext')
+
         company_id = db.df_query("SELECT id, name, euronext FROM companies")
 
         company_id_map = company_id.set_index(['name', 'euronext'])['id'].to_dict()
-        daystocks['cid'] = daystocks.apply(lambda row: company_id_map.get((row['name'], row['euronext'])), axis=1)
+        daystocks['cid'] = list(zip(daystocks['name'], daystocks['euronext']))
+        daystocks['cid'] = daystocks['cid'].map(company_id_map)
         daystocks["cid"] = daystocks["cid"].astype("Int64")
 
         daystocks.drop(columns=["euronext", "name"], inplace=True)
@@ -192,15 +212,8 @@ def insert_euronext_csv(df, db:TSDB, path):
             print(f"Erreur SQL avec {path}: {e}")
             #db.connection.rollback()
 
-def insert_euronext_xlsx(df, db:TSDB, path):
+def insert_euronext_xlsx(df, db:TSDB, path, existing_markets):
     try:
-        # Récupération des marchés
-        markets = pd.DataFrame()
-        markets['name'] = df['Market']
-        markets['alias'] = None
-        markets['boursorama'] = None
-        markets['sws'] = None
-        markets['euronext'] = None
         
         # Récupération des entreprises
         companies = pd.DataFrame()
@@ -208,7 +221,6 @@ def insert_euronext_xlsx(df, db:TSDB, path):
         companies["mid"] = None #stands for Market Id --  m_id -- mid
         companies["symbol"] = df['Symbol']
         companies["isin"] = df["ISIN"]
-        companies["boursorama"] = None
         companies["euronext"] = df["Market"]
         companies["pea"] = False
         companies["sector1"] = None
@@ -231,28 +243,35 @@ def insert_euronext_xlsx(df, db:TSDB, path):
         daystocks["date"] = get_euronext_date(path)
 
         #-------------------------------------------------------------------------------------------
-        # Adding market
-        existing_markets = db.df_query("SELECT name FROM markets")
-
-        # Filtrer uniquement les nouveaux marchés
-        new_markets = markets[~markets.set_index(['name']) #Set name and euronext as index (a company can have multiple euronext)
-                                .index.isin(existing_markets.set_index(['name']).index)] #Return a table of bool showing the presence 
-
-        if not new_markets.empty:
-            try:
-                db.df_write(new_markets, 'markets')
-            except Exception as e:
-                print("Erreur lors de l'insertion des marchés:", e)
-
-        #-------------------------------------------------------------------------------------------
         # Adding companies
 
-        # Associer chaque entreprise à l'ID du marché correspondant
-        existing_markets = db.df_query("SELECT id, name FROM markets")
+        companies['market_names'] = companies['euronext'].apply(get_euronext)
+        
+        # Mapper les noms vers des IDs
+        market_map = existing_markets.set_index('name')['id'].to_dict()
+        companies['market_ids'] = companies['market_names'].apply(
+            lambda names: [market_map[name] for name in names]
+        )
 
-        # Mapper les marchés existants pour obtenir les IDs
-        market_map = existing_markets.set_index(['name'])['id'].to_dict()
-        companies['mid'] = companies.apply(lambda row: market_map.get((row['euronext'])), axis=1)
+        # Supprimer les lignes sans marché reconnu (si besoin)
+        companies = companies[companies['market_ids'].map(len) > 0]
+
+        # Dupliquer les lignes : une par marché
+        companies = companies.explode('market_ids')
+        companies['mid'] = companies['market_ids'].astype("Int64")
+
+        companies = companies.drop(columns=['market_names', 'market_ids'])
+        
+        market_fields = existing_markets[['id', 'boursorama']].rename(columns={
+            'id': 'mid', 
+        })
+        companies = companies.merge(market_fields, on='mid', how='left')
+
+        # Retrouve le bon Euronext en inversant la map
+        id_to_market = {v: k for k, v in market_map.items()}
+
+        # Remplir la colonne euronext avec le nom du marché correspondant à l’ID
+        companies['euronext'] = companies['mid'].map(id_to_market)
         
         # Insérer uniquement les nouvelles sociétés
         existing_companies = db.df_query("SELECT name, euronext FROM companies")
@@ -269,10 +288,15 @@ def insert_euronext_xlsx(df, db:TSDB, path):
 
         #-------------------------------------------------------------------------------------------
         # Adding daystocks
+         # Explode for each euronext
+        daystocks['euronext'] = daystocks['euronext'].apply(get_euronext)
+        daystocks = daystocks.explode('euronext')
+
         company_id = db.df_query("SELECT id, name, euronext FROM companies")
 
         company_id_map = company_id.set_index(['name', 'euronext'])['id'].to_dict()
-        daystocks['cid'] = daystocks.apply(lambda row: company_id_map.get((row['name'], row['euronext'])), axis=1)
+        daystocks['cid'] = list(zip(daystocks['name'], daystocks['euronext']))
+        daystocks['cid'] = daystocks['cid'].map(company_id_map)
         daystocks["cid"] = daystocks["cid"].astype("Int64")
 
         daystocks.drop(columns=["name", "euronext"], inplace=True)
@@ -320,31 +344,46 @@ def find_company_id(symbol, company_id_map):
             return company_id_map[key]
     return None
 
+def create_key(boursorama, symbol):
+    if '*' in boursorama:
+        parts = boursorama.split('*')
+        return parts[0] + str(symbol) + parts[1]
+    else:
+        return str(boursorama) + str(symbol)
+
 def insert_boursorama(df, db, path, company_id_map):
     stocks = pd.DataFrame()
+    date = get_bousorama_date(path)
     
     stocks['value'] =  df['last'].apply(parse_price)
     stocks['volume'] =  pd.to_numeric(df['volume'])
-    stocks['date'] = get_bousorama_date(path)
+    stocks['date'] = date
     stocks['symbol'] = df['symbol']
 
-    stocks['cid'] = stocks.apply(lambda row: find_company_id(row["symbol"], company_id_map), axis=1)
+    # TODO: link with boursorama prefix, should work better or the same at least
+
+    #stocks['cid'] = stocks.apply(lambda row: find_company_id(row["symbol"], company_id_map), axis=1)
+    stocks['cid'] = list(zip(stocks['symbol']))
+    stocks['cid'] = stocks['symbol'].map(company_id_map)
     stocks["cid"] = stocks["cid"].astype("Int64")
 
     stocks.drop(columns=["symbol"], inplace=True)
+    stocks.drop(stocks[stocks['volume'] == 0].index, inplace=True) # drop les volumes null (aucun trade, useless)
 
-
-
-    print(get_bousorama_date(path), " Bourso indexe")
+    print(date, " Bourso indexe")
     return stocks
 
 
 @timer_decorator
 def store_files(start:str, end:str, website:str, db:TSDB):
+    existing_markets = db.df_query("SELECT id, name, alias, boursorama, sws, euronext FROM markets")
     stocks = []
+
     if (website == "boursorama"): # sera forcément demandé après indexation des companies
-        company_id = db.df_query("SELECT id, symbol FROM companies")
-        company_id_map = company_id.set_index(['symbol'])['id'].to_dict()
+        companies = db.df_query("SELECT * FROM companies")
+        companies['key'] = companies.apply(lambda row: create_key(row['boursorama'], row['symbol']), axis=1)
+        company_id_map = companies.set_index('key')['id'].to_dict()
+        #company_id_map = company_id.set_index(['symbol'])['id'].to_dict()
 
     for date in daterange(datetime.strptime(start, "%Y-%m-%d").date(), datetime.strptime(end, "%Y-%m-%d").date()):
         df = pd.DataFrame()
@@ -361,19 +400,15 @@ def store_files(start:str, end:str, website:str, db:TSDB):
             ext = path.split('.')[-1]
 
             if (ext == "csv"):
-                insert_euronext_csv(df, db, path)
+                insert_euronext_csv(df, db, path, existing_markets)
             else:
-                insert_euronext_xlsx(df, db, path)
+                insert_euronext_xlsx(df, db, path, existing_markets)
 
         if website == "boursorama":
 
             files = find_boursorama(date)
             if files == None or files == []:
                 continue
-
-            stocks = []
-            #sorting :D
-            files.sort()
 
             for file in files:
                 # for each file detected that month, create and concatenate the stocks DataFrame
@@ -383,15 +418,22 @@ def store_files(start:str, end:str, website:str, db:TSDB):
 
                 #on append les stocks généres
                 stocks.append(insert_boursorama(df, db, file, company_id_map))
-            
 
-            s = pd.concat(stocks, ignore_index=True)
-
-            # on insert tous les stocks générés pour plus d'efficacité
-            try:
-                db.df_write(s, 'stocks')
-            except Exception as e:
-                print("Erreur lors de l'insertion des stocks bourorama:", e)
+                # Si on atteint 60 éléments dans le tableau stocks, on effectue l'insertion et on vide le tableau
+                if len(stocks) >= 60:
+                    try:
+                        db.df_write(pd.concat(stocks, ignore_index=True), 'stocks')
+                        stocks = []  # Vider le tableau après l'insertion
+                        print("INSERTION DANS LA DB")
+                    except Exception as e:
+                        print(f"Erreur lors de l'insertion par lot des stocks Boursorama : {e}")
+    
+    # Insérer le reste des stocks (si il en reste) après la fin de la boucle
+    if len(stocks) > 0:
+        try:
+            db.df_write(pd.concat(stocks, ignore_index=True), 'stocks')
+        except Exception as e:
+            print(f"Erreur lors de l'insertion des stocks restants Boursorama : {e}")
     
     return
 
@@ -405,6 +447,6 @@ if __name__ == '__main__':
     #db = tsdb.TimescaleStockMarketModel('bourse', 'ricou', 'localhost', 'monmdp') # outside docker
     db._purge_database()
     db._setup_database()
-    store_files("2020-05-01", "2020-05-30", "euronext", db)
-    store_files("2020-05-01", "2020-05-30", "boursorama", db)
+    store_files("2018-05-01", "2025-05-30", "euronext", db)
+    store_files("2018-05-01", "2025-05-30", "boursorama", db)
     print("Done Extract Transform and Load")
