@@ -317,7 +317,7 @@ def parse_price(val):
         return None
     val = str(val).strip()
     if '(c)' in val:
-        return float(val.replace('(c)', '').replace(' ', '').replace(',', '.').strip()) / 100
+        return float(val.replace('(c)', '').replace(' ', '').replace(',', '.').strip())# / 100
     elif '(s)' in val:
         return float(val.replace('(s)', '').replace(' ', '').replace(',', '.'))
     else:
